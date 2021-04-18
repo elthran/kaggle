@@ -38,9 +38,9 @@ def load_csv_data(filename="data.csv", id=None, dtype=None, nrows=None, usecols=
     return df
 
 
-def load_all_csv_data(train_filename="train.csv", test_filename="test.csv", id=None, dtype=None, nrows=None):
-    train = pd.read_csv(train_filename, dtype=dtype, nrows=nrows)
-    test = pd.read_csv(test_filename, dtype=dtype)
+def load_all_csv_data(train_filename="train.csv", test_filename="test.csv", id=None, dtype=None, nrows=None, parse_dates=[]):
+    train = pd.read_csv(train_filename, dtype=dtype, nrows=nrows, parse_dates=parse_dates)
+    test = pd.read_csv(test_filename, dtype=dtype, parse_dates=parse_dates)
     df = pd.concat([train, test], sort=False)
     if id:
         df = df.set_index(keys=id)

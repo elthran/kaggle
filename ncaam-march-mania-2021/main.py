@@ -449,7 +449,6 @@ class Lgb_Model(Base_Model):
                   "metric": 'logloss',
                   'reg_alpha': 0.3899,
                   'reg_lambda': 0.648,
-                  'random_state': 47,
                   }
         return params
 
@@ -479,7 +478,7 @@ class Xgb_Model(Base_Model):
                   'eval_metric': 'logloss',
                   'min_child_weight': 3,
                   'gamma': 0.25,
-                  'n_estimators': 5000}
+                  'n_estimators': 10000}
         return params
 
 
@@ -503,13 +502,12 @@ class Catb_Model(Base_Model):
     def get_params(self):
         params = {'loss_function': 'Logloss',
                   'task_type': "CPU",
-                  'iterations': 5000,
+                  'iterations': 10000,
                   'od_type': "Iter",
                   'depth': 3,
                   'colsample_bylevel': 0.5,
                   'early_stopping_rounds': 300,
                   'l2_leaf_reg': 18,
-                  'random_seed': 42,
                   'use_best_model': True
                   }
         return params
