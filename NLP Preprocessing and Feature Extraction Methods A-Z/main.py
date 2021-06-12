@@ -368,3 +368,46 @@ train_df = pd.read_csv("train.csv")
 
 
 
+# Remove upper case
+train_df["text_clean"] = train_df["text"].apply(lambda x: x.lower())
+
+# Remove text contractions
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: contractions.fix(x))
+
+# Remove any URLs from the text
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: remove_URL(x))
+
+# Remove any HTML tags
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: remove_html(x))
+
+#Remove non-ASCII from text
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: remove_non_ascii(x))
+
+# Remove special characters
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: remove_special_characters(x))
+
+# Remove punctuation
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: remove_punct(x))
+
+# Map common typos and slang
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: other_clean(x))
+
+# Fix spelling errors
+train_df["text_clean"] = train_df["text_clean"].apply(lambda x: textblob.TextBlob(x).correct())
+
+# Break the words into a list
+train_df['tokenized'] = train_df['text_clean'].apply(nltk.tokenize.word_tokenize)
+
+# Remove stopwords (eg. About, Above, Across, After, ..
+train_df['stopwords_removed'] = train_df['tokenized'].\
+    apply(lambda x: [word for word in x if word not in nltk.corpus.stop])
+
+%time
+# Use stemmer
+train_df['stemmer'] = train_df['stopwords_removed'].apply(lambda x: stemmer(x))
+
+#%%
+
+display(train_df.head(50))
+
+
