@@ -47,6 +47,10 @@ def load_all_csv_data(train_filename="train.csv", test_filename="test.csv", id=N
     return df
 
 
+def save_data_as_csv(df, filename="cleaned_train.csv"):
+    df.to_csv(filename)
+
+
 def describe_data(df):
     print(f"\nDataframe contains {len(df)} rows and {len(df.columns)} columns")
     print(f"\nDescription:\n{df.describe()}")
