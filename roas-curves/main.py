@@ -6,7 +6,8 @@ import seaborn as sns
 from datetime import date, timedelta
 from scipy.optimize import curve_fit
 
-from utilities import get_redshift_connection
+from redshift_utilities import RedshiftHelper
+from math_functions import MathHelper
 
 # Set pandas options
 pd.set_option('display.max_rows', 500)
@@ -15,56 +16,25 @@ pd.set_option('display.width', 1000)
 
 # Set matplotlib options
 plt.interactive(False)
-plt.figure(figsize=(20, 12))
 
 
 class RoasCurve:
 
     def __init__(self, min_num_installs=200, use_cached_data=False, load_plots=False):
         self.earliest_date = '2021-03-24'
-        self.end_date = '2021-07-01'
-        self.min_num_installs = min_num_installs
-        self.roas_df = self.load_roas_data_locally() if use_cached_data else self.pull_roas_data_from_redshift()
-
-    def pull_roas_data_from_redshift(self):
-        redshift_engine = get_redshift_connection()
-
-        user_summary_query = f"""
-        SELECT DISTINCT teamid, 
-                        first_contact_day
-        FROM streetrace_prod_user_summary
-        WHERE first_contact_day >= '{self.earliest_date}' and first_contact_day < '{self.end_date}'
-        """
-        user_summary_df = pd.read_sql(user_summary_query, redshift_engine)
-
-        spend_query = f"""
-        SELECT date as install_date, 
-               sum(spend) as spend
-        FROM streetrace_prod_ua_campaign_summary
-        WHERE date >= '{self.earliest_date}' and date < '{self.end_date}'
-        GROUP BY 1
-        ORDER BY 1
-        """
-        spend_df = pd.read_sql(spend_query, redshift_engine)
-
-        revenue_query = f"""
-        SELECT us.teamid,
-               first_contact_day as install_date, 
-               clean_date,
-               datediff(DAY,'{self.earliest_date}',first_contact_day) as max_age,
-               sum(iap_revenue_day) as day_iap_revenue, 
-               sum(tapjoy_revenue_day) as day_tapjoy_revenue, 
-               sum(ironsource_revenue_day) as day_ad_revenue
-        FROM streetrace_prod_dau d
-        INNER JOIN ({user_summary_query}) us on d.teamid = us.teamid
-        WHERE d.clean_date >= us.first_contact_day and (clean_date::date <= current_date - interval '1 day')
-        GROUP BY 1,2,3
-        """
-        revenue_df = pd.read_sql(revenue_query, redshift_engine)
-
-        start_date = pd.Timestamp(date(int(self.earliest_date[:4]),
+        self.earliest_np_date = pd.Timestamp(date(int(self.earliest_date[:4]),
                                        int(self.earliest_date[5:7]),
                                        int(self.earliest_date[8:])))
+        self.end_date = '2021-07-01'
+        self.min_num_installs = min_num_installs
+        self.roas_df = self.load_cached_roas_df() if use_cached_data else self.build_roas_df_from_redshift()
+        self.math_helper = MathHelper()
+
+    def build_roas_df_from_redshift(self):
+        redshift_helper = RedshiftHelper()
+        user_summary_df = redshift_helper.get_user_summary_df()
+        spend_df = redshift_helper.get_spend_df()
+        revenue_df = redshift_helper.get_revenue_df()
 
         revenue_df["days_since_install"] = (revenue_df["clean_date"] - revenue_df["install_date"]).dt.days
 
@@ -101,54 +71,96 @@ class RoasCurve:
         roas_df["running_revenue_total"] = roas_df.groupby('install_date')['day_revenue'].cumsum()
         roas_df["roas"] = roas_df["running_revenue_total"] / roas_df["spend"]
 
-        roas_df["install_week"] = (roas_df['install_date'] - start_date) // np.timedelta64(1, 'W')
+        roas_df["install_week"] = (roas_df['install_date'] - self.earliest_np_date) // np.timedelta64(1, 'W')
 
         roas_df.to_feather("roas_df.feather")
         return roas_df
 
     @staticmethod
-    def load_roas_data_locally():
+    def load_cached_roas_df():
         return pd.read_feather("roas_df.feather")
+
+    def get_roas_mean_df(self):
+        return self.roas_df.groupby("days_since_install").agg(
+            roas=pd.NamedAgg(column="roas", aggfunc=np.mean)).reset_index()
+
+    def get_roas_weighted_df(self):
+        df = self.roas_df.copy()
+        # Use the install week as the weighting (so later installs are heavier)
+        df["weight_column"] = df["install_week"] + 1
+        total_weight = df["weight_column"].sum()
+        df['weighted_roas'] = df['roas'] * df['weight_column'] / total_weight
+        df.drop(["weight_column"], inplace=True, axis=1)
+
+        # for days_since_install in df['days_since_install'].unique():
+        #     df["weight"] = (df["install_date"] - self.earliest_np_date).dt.days
+        #     max_weight = df.loc[df['install_week'] == days_since_install, 'weight'].max()
+        #     df['weighted_roas'] = df['roas'] * df['install_week'] / max_weight
+
+        print(df.head(2000))
+
+
+        return df.groupby("days_since_install").agg(
+            roas=pd.NamedAgg(column="weighted_roas", aggfunc=np.mean)).reset_index()
+
 
     def plot_all_raw_data(self):
         sns.lineplot(data=self.roas_df, x='days_since_install', y='roas', hue='install_cohort')
+        plt.title(f'Raw data cohorted by week')
         plt.show()
 
-    @staticmethod
-    def first_func(x, a, b, c):
-        return a * np.exp(-b * x) + c
+    def calculate_all_curves(self):
 
-    def calculate_curve(self):
-        self.X = self.roas_df["days_since_install"].values
-        self.y = self.roas_df["roas"].values
+        functions_to_fit = [self.math_helper.generalized_logistic_function,
+                            self.math_helper.modified_powerlaw_function,
+                            self.math_helper.heavily_modified_logarithmic_function]
+        datasets_to_fit = [{"data_name": "mean of all-time data", "data": self.get_roas_mean_df()},
+                           {"data_name": "forward-weighted mean of all-time data", "data": self.get_roas_weighted_df()}]
+        summary_of_results = []
 
-        sns.lineplot(x=self.X, y=self.y, data=self.roas_df, hue='install_cohort', ci=False)
+        for function in functions_to_fit:
+            for dataset in datasets_to_fit:
+                df = dataset.get("data")
+                X = df.days_since_install.values
+                y = df.roas.values
+                popt, pcov = curve_fit(function, X, y, maxfev=20000)
+                y_pred = function(X, *popt)
+                sns.lineplot(x=X, y=y, data=df, ci=False)
+                plt.plot(X, y_pred, color='black', linewidth=1)
+                plt.title(f'{function.__name__} fit on {dataset.get("data_name")}')
+                error_metrics = self.get_error_metrics(popt, y, y_pred)
+                summary_of_results.append({"error_metrics": error_metrics,
+                                           "function_used": function.__name__,
+                                           "dataset_tested_on": dataset.get("data_name")})
+                print(f'{function.__name__} has RMSE of {error_metrics["root_mean_squared_error"]} '
+                      f'on {dataset.get("data_name")}')
+                print(error_metrics)
+                print("used parameters:", popt)
+                plt.show()
 
-        aggregated_df = self.roas_df.groupby("days_since_install").agg(
-            roas=pd.NamedAgg(column="roas", aggfunc=np.mean)).reset_index()
-        aggregated_X = aggregated_df["days_since_install"].values
-        aggregated_y = aggregated_df["roas"].values
-        popt, pcov = curve_fit(self.first_func, aggregated_X, aggregated_y)
-        y_pred = self.first_func(aggregated_X, *popt)
-        plt.plot(aggregated_X, y_pred, color='black', label='fit: a=%5.3f, b=%5.3f, c=%5.3f' % tuple(popt))
-        self.calculate_error(popt, aggregated_y, y_pred)
-        plt.show()
+        best_results = min(summary_of_results, key=lambda x: x["error_metrics"]["root_mean_squared_error"])
+        best_error = best_results["error_metrics"]["root_mean_squared_error"]
+        best_data = best_results["dataset_tested_on"]
 
-    def calculate_error(self, popt, aggregated_y, y_pred):
-        absError = y_pred - aggregated_y
-        SE = np.square(absError)  # squared errors
-        MSE = np.mean(SE)  # mean squared errors
-        RMSE = np.sqrt(MSE)  # Root Mean Squared Error, RMSE
-        Rsquared = 1.0 - (np.var(absError) / np.var(aggregated_y))
+        print(f"""Best results is {best_results["function_used"]} with rmse of {best_error} on {best_data}""")
 
-        print('Parameters:', popt)
-        print('RMSE:', RMSE)
-        print('R-squared:', Rsquared)
+    def get_error_metrics(self, popt, y, y_pred):
+        absolute_error = y_pred - y
+        squared_error = np.square(absolute_error)
+        mean_squared_error = np.mean(squared_error)
+        root_mean_squared_error = np.sqrt(mean_squared_error)
+        r_squared_error = 1.0 - (np.var(absolute_error) / np.var(y))
+        return {"absolute_error": absolute_error,
+                "squared_error": squared_error,
+                "mean_squared_error": mean_squared_error,
+                "root_mean_squared_error": root_mean_squared_error,
+                "r_squared_error": r_squared_error}
 
 
 curve = RoasCurve(use_cached_data=True)
 curve.plot_all_raw_data()
-curve.calculate_curve()
+curve.calculate_all_curves()
+# curve.get_roas_weighted_df()
 
 # for cohort in roas_df['install_cohort'].unique():
 #     filtered_df = roas_df[roas_df['install_cohort'] == cohort].groupby("days_since_install").agg(
