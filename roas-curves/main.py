@@ -23,8 +23,8 @@ class RoasCurve:
     def __init__(self, min_num_installs=200, use_cached_data=False, load_plots=False):
         self.earliest_date = '2021-03-24'
         self.earliest_np_date = pd.Timestamp(date(int(self.earliest_date[:4]),
-                                       int(self.earliest_date[5:7]),
-                                       int(self.earliest_date[8:])))
+                                                  int(self.earliest_date[5:7]),
+                                                  int(self.earliest_date[8:])))
         self.end_date = '2021-07-01'
         self.min_num_installs = min_num_installs
         self.roas_df = self.load_cached_roas_df() if use_cached_data else self.build_roas_df_from_redshift()
@@ -50,7 +50,7 @@ class RoasCurve:
         roas_df = pd.merge(roas_df, revenue_df, how="inner", on=["install_date"])
 
         # Assign each day to a weekly cohort, with the cohorts starting on day 1
-        offset_week_day = 7 - start_date.weekday()
+        offset_week_day = 7 - self.earliest_np_date.weekday()
         roas_df["offset_install_date"] = roas_df['install_date'] + timedelta(days=offset_week_day)
         roas_df['install_cohort'] = roas_df['offset_install_date'].dt.to_period('W').apply(lambda r: r.start_time)
         roas_df["install_cohort"] = roas_df['install_cohort'] - timedelta(days=offset_week_day)
@@ -86,23 +86,53 @@ class RoasCurve:
 
     def get_roas_weighted_df(self):
         df = self.roas_df.copy()
-        # Use the install week as the weighting (so later installs are heavier)
-        df["weight_column"] = df["install_week"] + 1
-        total_weight = df["weight_column"].sum()
-        df['weighted_roas'] = df['roas'] * df['weight_column'] / total_weight
-        df.drop(["weight_column"], inplace=True, axis=1)
 
-        # for days_since_install in df['days_since_install'].unique():
-        #     df["weight"] = (df["install_date"] - self.earliest_np_date).dt.days
-        #     max_weight = df.loc[df['install_week'] == days_since_install, 'weight'].max()
-        #     df['weighted_roas'] = df['roas'] * df['install_week'] / max_weight
+        df["weighting"] = df["install_week"] + 1   # The larger the weight, the more influencial to the curve
 
-        print(df.head(2000))
+        weighted_df = pd.DataFrame()
 
+        for player_age in df['days_since_install'].unique():
+            same_age_df = df[df['days_since_install'] == player_age]
+            weights = same_age_df["weighting"].sum()
+            same_age_df["weighted_unbalanced_roas"] = same_age_df["roas"] * same_age_df["weighting"]
+            same_age_df["row_weight_balance"] = weights
+            weighted_df = weighted_df.append(same_age_df[["install_date",
+                                                          "days_since_install",
+                                                          "weighted_unbalanced_roas",
+                                                          "row_weight_balance"]])
 
-        return df.groupby("days_since_install").agg(
-            roas=pd.NamedAgg(column="weighted_roas", aggfunc=np.mean)).reset_index()
+        weighted_df = df.merge(weighted_df, how='outer', on=["install_date", "days_since_install"])
 
+        weighted_df = weighted_df.groupby(['days_since_install']).apply(
+            lambda x: x['weighted_unbalanced_roas'].sum() / x['row_weight_balance'].max()).reset_index(name='roas')
+
+        return weighted_df
+
+    def get_roas_reverse_weighted_df(self):
+        df = self.roas_df.copy()
+
+        max_insall_weight = df["install_week"].max()
+
+        df["weighting"] = max_insall_weight + 1 - df["install_week"]
+
+        weighted_df = pd.DataFrame()
+
+        for player_age in df['days_since_install'].unique():
+            same_age_df = df[df['days_since_install'] == player_age]
+            weights = same_age_df["weighting"].sum()
+            same_age_df["weighted_unbalanced_roas"] = same_age_df["roas"] * same_age_df["weighting"]
+            same_age_df["row_weight_balance"] = weights
+            weighted_df = weighted_df.append(same_age_df[["install_date",
+                                                          "days_since_install",
+                                                          "weighted_unbalanced_roas",
+                                                          "row_weight_balance"]])
+
+        weighted_df = df.merge(weighted_df, how='outer', on=["install_date", "days_since_install"])
+
+        weighted_df = weighted_df.groupby(['days_since_install']).apply(
+            lambda x: x['weighted_unbalanced_roas'].sum() / x['row_weight_balance'].max()).reset_index(name='roas')
+
+        return weighted_df
 
     def plot_all_raw_data(self):
         sns.lineplot(data=self.roas_df, x='days_since_install', y='roas', hue='install_cohort')
@@ -114,9 +144,18 @@ class RoasCurve:
         functions_to_fit = [self.math_helper.generalized_logistic_function,
                             self.math_helper.modified_powerlaw_function,
                             self.math_helper.heavily_modified_logarithmic_function]
-        datasets_to_fit = [{"data_name": "mean of all-time data", "data": self.get_roas_mean_df()},
-                           {"data_name": "forward-weighted mean of all-time data", "data": self.get_roas_weighted_df()}]
+        datasets_to_fit = [{"data_name": "mean of all-time data", "data": self.get_roas_mean_df(), "color": "k"},
+                           {"data_name": "forward-weighted mean of all-time data", "data": self.get_roas_weighted_df(), "color": "b"},
+                           {"data_name": "reverse-weighted mean of all-time data", "data": self.get_roas_reverse_weighted_df(), "color": "r"},]
         summary_of_results = []
+
+        for dataset in datasets_to_fit:
+            df = dataset.get("data")
+            X = df.days_since_install.values
+            y = df.roas.values
+            plt.plot(X, y, color=dataset.get("color"), label=dataset.get("data_name"))
+        plt.legend(loc="lower right")
+        plt.show()
 
         for function in functions_to_fit:
             for dataset in datasets_to_fit:
@@ -134,7 +173,8 @@ class RoasCurve:
                                            "dataset_tested_on": dataset.get("data_name")})
                 print(f'{function.__name__} has RMSE of {error_metrics["root_mean_squared_error"]} '
                       f'on {dataset.get("data_name")}')
-                print(error_metrics)
+                print(f'{function.__name__} has r_squared_error of {error_metrics["r_squared_error"]} '
+                      f'on {dataset.get("data_name")}')
                 print("used parameters:", popt)
                 plt.show()
 
