@@ -87,7 +87,7 @@ class RoasCurve:
     def get_roas_weighted_df(self):
         df = self.roas_df.copy()
 
-        df["weighting"] = df["install_week"] + 1   # The larger the weight, the more influencial to the curve
+        df["weighting"] = df["install_week"] // 4 + 1  # The larger the weight, the more influencial to the curve
 
         weighted_df = pd.DataFrame()
 
@@ -113,7 +113,7 @@ class RoasCurve:
 
         max_insall_weight = df["install_week"].max()
 
-        df["weighting"] = max_insall_weight + 1 - df["install_week"]
+        df["weighting"] = max_insall_weight + 1 - df["install_week"] // 4
 
         weighted_df = pd.DataFrame()
 
@@ -141,12 +141,16 @@ class RoasCurve:
 
     def calculate_all_curves(self):
 
-        functions_to_fit = [self.math_helper.generalized_logistic_function,
-                            self.math_helper.modified_powerlaw_function,
-                            self.math_helper.heavily_modified_logarithmic_function]
-        datasets_to_fit = [{"data_name": "mean of all-time data", "data": self.get_roas_mean_df(), "color": "k"},
-                           {"data_name": "forward-weighted mean of all-time data", "data": self.get_roas_weighted_df(), "color": "b"},
-                           {"data_name": "reverse-weighted mean of all-time data", "data": self.get_roas_reverse_weighted_df(), "color": "r"},]
+        functions_to_fit = [
+            self.math_helper.generalized_logistic_function,
+            # self.math_helper.modified_powerlaw_function,
+            # self.math_helper.heavily_modified_logarithmic_function
+        ]
+        datasets_to_fit = [
+            {"data_name": "mean of all-time data", "data": self.get_roas_mean_df(), "color": "k"},
+            {"data_name": "forward-weighted mean of all-time data", "data": self.get_roas_weighted_df(), "color": "b"},
+            # {"data_name": "reverse-weighted mean of all-time data", "data": self.get_roas_reverse_weighted_df(), "color": "r"},
+        ]
         summary_of_results = []
 
         for dataset in datasets_to_fit:
@@ -159,30 +163,41 @@ class RoasCurve:
 
         for function in functions_to_fit:
             for dataset in datasets_to_fit:
-                df = dataset.get("data")
-                X = df.days_since_install.values
-                y = df.roas.values
-                popt, pcov = curve_fit(function, X, y, maxfev=20000)
-                y_pred = function(X, *popt)
-                sns.lineplot(x=X, y=y, data=df, ci=False)
-                plt.plot(X, y_pred, color='black', linewidth=1)
-                plt.title(f'{function.__name__} fit on {dataset.get("data_name")}')
-                error_metrics = self.get_error_metrics(popt, y, y_pred)
-                summary_of_results.append({"error_metrics": error_metrics,
-                                           "function_used": function.__name__,
-                                           "dataset_tested_on": dataset.get("data_name")})
-                print(f'{function.__name__} has RMSE of {error_metrics["root_mean_squared_error"]} '
-                      f'on {dataset.get("data_name")}')
-                print(f'{function.__name__} has r_squared_error of {error_metrics["r_squared_error"]} '
-                      f'on {dataset.get("data_name")}')
-                print("used parameters:", popt)
-                plt.show()
+                for max_age in [30, 60, 90, 50]:
+                    df = dataset.get("data")
+                    X = df.days_since_install.values
+                    y = df.roas.values
+                    # Try fitting the curve only to 60 days
+                    age_restricted_df = df[df["days_since_install"] < max_age]
+                    X_at_age = age_restricted_df.days_since_install.values
+                    y_at_age = age_restricted_df.roas.values
+                    popt, pcov = curve_fit(function, X_at_age, y_at_age, maxfev=20000)
+                    y_pred = function(X, *popt)
+                    # Check error
+                    error_metrics = self.get_error_metrics(popt, y, y_pred)
+                    summary_of_results.append({"error_metrics": error_metrics,
+                                               "function_used": function.__name__,
+                                               "dataset_tested_on": dataset.get("data_name"),
+                                               "max_age": age})
+                    print(f'{function.__name__} has RMSE of {error_metrics["root_mean_squared_error"]} '
+                          f'on {dataset.get("data_name")}')
+                    print(f'{function.__name__} has r_squared_error of {error_metrics["r_squared_error"]} '
+                          f'on {dataset.get("data_name")}')
+                    print("used parameters:", popt)
+                    # Plot if good match
+                    if error_metrics["root_mean_squared_error"] < 0.025:
+                        sns.lineplot(x=X, y=y, data=df, ci=False)
+                        plt.plot(X, y_pred, color='black', linewidth=1)
+                        plt.title(f'{function.__name__} fit on \n {dataset.get("data_name")} up to age {age}')
+                        plt.show()
 
         best_results = min(summary_of_results, key=lambda x: x["error_metrics"]["root_mean_squared_error"])
         best_error = best_results["error_metrics"]["root_mean_squared_error"]
         best_data = best_results["dataset_tested_on"]
+        best_age = best_results["max_age"]
 
-        print(f"""Best results is {best_results["function_used"]} with rmse of {best_error} on {best_data}""")
+        print(
+            f"""Best results is {best_results["function_used"]} with rmse of {best_error} on {best_data} with max_age {best_age}""")
 
     def get_error_metrics(self, popt, y, y_pred):
         absolute_error = y_pred - y
