@@ -4,19 +4,19 @@ from sqlalchemy import create_engine
 
 
 class RedshiftHelper:
-    def __init__(self):
+    def __init__(self, earliest_date=None, end_date=None):
         self.redshift_engine = self.get_redshift_connection()
         self.user_summary_query = f"""
                 SELECT DISTINCT teamid, 
                                 first_contact_day
                 FROM streetrace_prod_user_summary
-                WHERE first_contact_day >= '{self.earliest_date}' and first_contact_day < '{self.end_date}'
+                WHERE first_contact_day >= '{earliest_date}' and first_contact_day < '{end_date}'
                 """
         self.spend_query = f"""
                 SELECT date as install_date, 
                        sum(spend) as spend
                 FROM streetrace_prod_ua_campaign_summary
-                WHERE date >= '{self.earliest_date}' and date < '{self.end_date}'
+                WHERE date >= '{earliest_date}' and date < '{end_date}'
                 GROUP BY 1
                 ORDER BY 1
                 """
@@ -24,16 +24,17 @@ class RedshiftHelper:
                 SELECT us.teamid,
                        first_contact_day as install_date, 
                        clean_date,
-                       datediff(DAY,'{self.earliest_date}',first_contact_day) as max_age,
+                       datediff(DAY,'{earliest_date}',first_contact_day) as max_age,
                        sum(iap_revenue_day) as day_iap_revenue, 
                        sum(tapjoy_revenue_day) as day_tapjoy_revenue, 
                        sum(ironsource_revenue_day) as day_ad_revenue
                 FROM streetrace_prod_dau d
-                INNER JOIN ({user_summary_query}) us on d.teamid = us.teamid
+                INNER JOIN ({self.user_summary_query}) us on d.teamid = us.teamid
                 WHERE d.clean_date >= us.first_contact_day and (clean_date::date <= current_date - interval '1 day')
                 GROUP BY 1,2,3
                 """
 
+    @staticmethod
     def get_redshift_connection():
         uri = "postgresql://{username}:{password}@{hostname}:{port}/{database}".format(
             username='jbrunner',

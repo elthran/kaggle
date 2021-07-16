@@ -3,7 +3,11 @@ import numpy as np
 
 class MathHelper:
     def __init__(self):
-        pass
+        self.all_functions = [
+            {"name": "modified_powerlaw_function", "function": self.modified_powerlaw_function},
+            {"name": "heavily_modified_logarithmic_function", "function": self.heavily_modified_logarithmic_function},
+            {"name": "generalized_logistic_function", "function": self.generalized_logistic_function},
+        ]
 
     @staticmethod
     def modified_powerlaw_function(x, a, b, c):
@@ -23,4 +27,12 @@ class MathHelper:
         c is related to the value Y(0), and is the inflection point of the curve, i.e. the x value of the middle of the the linear portion of the curve
         d the upper asymptote
         g asymmetry factor - set to 0.5 initially"""
+        # return (np.abs((a - d) / ((1 + ((x / c) ** np.abs(b))) ** np.abs(g))) + d
         return ((a - d) / ((1 + ((x / c) ** b)) ** g)) + d
+
+    def get_functions(self, function_name):
+        """Returns a list of all functions or a list with only the chosen function if passed in"""
+        if function_name:
+            return [function_dict for function_dict in self.all_functions if function_dict["name"] == function_name]
+        else:
+            return self.all_functions
