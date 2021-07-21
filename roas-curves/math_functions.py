@@ -1,5 +1,7 @@
 import numpy as np
 
+from scipy.optimize import curve_fit
+
 
 class MathHelper:
     def __init__(self):
@@ -8,6 +10,14 @@ class MathHelper:
             {"name": "heavily_modified_logarithmic_function", "function": self.heavily_modified_logarithmic_function},
             {"name": "generalized_logistic_function", "function": self.generalized_logistic_function},
         ]
+        self.function = None
+        self.parameters = []
+
+    def fit_curve(self, x, y):
+        self.parameters, pcov = curve_fit(self.function, x, y, maxfev=20000)
+
+    def run_prediction(self, x):
+        return self.function(x, *self.parameters)
 
     @staticmethod
     def modified_powerlaw_function(x, a, b, c):

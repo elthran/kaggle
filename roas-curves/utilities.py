@@ -5,7 +5,7 @@ from tabulate import tabulate
 
 class Utilities:
     def __init__(self):
-        self.color_index_mapping = ["b", "g", "r", "y"]
+        self.color_index_mapping = ["b", "g", "r", "yellow", "m", "c", "lime"]
         self.color_index = 0
         self.all_error_metrics = []
 
@@ -16,6 +16,9 @@ class Utilities:
             color = self.color_index_mapping[self.color_index]
             self.color_index = (self.color_index + 1) % len(self.color_index_mapping)
         return color
+
+    def reset_color(self):
+        self.color_index = 0
 
     @staticmethod
     def print_clearing_dashes():
@@ -68,25 +71,27 @@ class Utilities:
                                   "root_mean_squared_error_0_to_30": root_mean_squared_error_0_to_30,
                                   "root_mean_squared_error_30_plus": root_mean_squared_error_30_plus,
                                   "r_squared_error_0_to_30": r_squared_error_0_to_30,
-                                  "r_squared_error_30_plus": r_squared_error_30_plus})
+                                  "r_squared_error_30_plus": r_squared_error_30_plus,
+                                  "r_squared_average": (r_squared_error_0_to_30 + r_squared_error_30_plus) / 2})
 
     def append_error_metric(self, metric):
         self.all_error_metrics.append(metric)
         print(f"Completed {metric['function_name']} on {metric['dataset_tested_on']} for max_age {metric['max_age']}.")
 
     def print_final_error_metrics(self):
-        sort_key = "mean_squared_error_0_to_30"
+        sort_key = "r_squared_average"
         relevant_keys = ["function_name",
                          "dataset_tested_on",
                          "max_age",
+                         "r_squared_error_0_to_30",
+                         "r_squared_error_30_plus",
+                         "r_squared_average",
                          "mean_squared_error_0_to_30",
                          "mean_squared_error_30_plus",
                          "root_mean_squared_error_0_to_30",
-                         "root_mean_squared_error_30_plus",
-                         "r_squared_error_0_to_30",
-                         "r_squared_error_30_plus"]
+                         "root_mean_squared_error_30_plus"]
         clean_dicts = sorted([{key: dict[key] for key in relevant_keys} for dict in self.all_error_metrics],
-                             key=lambda k: k[sort_key])
+                             key=lambda k: k[sort_key], reverse=True)
         header = clean_dicts[0].keys()
         rows = [x.values() for x in clean_dicts]
         print(f"Printing results sorted by {sort_key}")
