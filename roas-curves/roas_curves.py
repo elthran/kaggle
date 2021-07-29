@@ -31,7 +31,7 @@ class RoasCurve:
         self.min_num_installs = min_num_installs
         self.data_blend = config.get('data_blend')
         self.data_function = config.get('data_function')
-        self.max_train_ages = [config.get('max_train_age')] if config.get('max_train_age') else [14, 30, 60, 90]
+        self.max_train_ages = [config.get('max_train_age')] if config.get('max_train_age') else [30, 45, 60, 90]
 
         self.plot_all = plot_all
         self.redshift_helper = RedshiftHelper(config)
@@ -165,7 +165,12 @@ class RoasCurve:
                  day_organic_revenue=pd.NamedAgg(column="day_organic_revenue", aggfunc="sum")).reset_index()
         organic_df["organic_percent"] = organic_df["day_organic_revenue"] / (
                 organic_df["day_organic_revenue"] + organic_df["day_ua_revenue"])
-        organic_revenue_percent = int(100 * organic_df['organic_percent'].max())
+        raw_organic_revenue_percent = int(100 * organic_df['organic_percent'].max())
+        if raw_organic_revenue_percent > 20 or raw_organic_revenue_percent < 15:
+            print(f"Organics are {raw_organic_revenue_percent}% of revenue. "
+                  f"This indicates an abnormality and will be adjusted.")
+        organic_revenue_percent = max(15, min(20, raw_organic_revenue_percent))  # Keep it within 15-20%
+        print(f"organic_revenue_percent is being set as {organic_revenue_percent}")
         return 100 / (100 - organic_revenue_percent)
 
     def plot_all_raw_data(self):
@@ -232,14 +237,13 @@ class RoasCurve:
 
     def choose_math_function(self):
         functions_to_fit = self.math_helper.get_functions(self.data_function)
-
         X = self.blended_roas_df.days_since_install.values
         y = self.blended_roas_df.roas.values
         y_pred = None
 
         for function_dict in functions_to_fit:
             self.math_helper.function, function_name = function_dict.get("function"), function_dict.get("name")
-            sns.lineplot(x=X, y=y, data=self.blended_roas_df, color="r")
+            sns.lineplot(x=X, y=y, data=self.blended_roas_df, color="k", label="Training Data")
             self.utilities.reset_color()
             for max_age in self.max_train_ages:
                 # Fit the curve up to the max train age
@@ -278,6 +282,7 @@ class RoasCurve:
             if y_pred[-1] > 0.8:  # If the data gets near breakeven, add it to the graph for a visual cue
                 plt.axhline(y=1, color="k", label="Breakeven")
             plt.title(f'{function_name} on data {self.data_blend}')
+            plt.xlim([0, 45])
             plt.legend(loc="lower right")
             plt.show()
 
@@ -288,49 +293,51 @@ class RoasCurve:
             self.utilities.print_train_age_message(self.max_train_ages)
 
     def run_breakeven_curves(self):
-        self.predictions["natural"] = self.math_helper.run_prediction([i for i in range(0, 45)])
-        print(self.predictions["natural"])
-
-        sns.lineplot(x=[i for i in range(len(self.predictions["natural"]))], y=self.predictions["natural"], color="b",
-                     ci=False,
-                     label="Jacob predict")
-        for day in [30]:
+        self.predictions["natural"] = self.math_helper.run_prediction([i for i in range(0, 46)])
+        # sns.lineplot(x=[i for i in range(len(self.predictions["natural"]))], y=self.predictions["natural"], color="b",
+        #              ci=False,
+        #              label="Jacob predict")
+        for day in [45]:
             day_1_lift_required = 1 / self.predictions["natural"][day]
-            # self.predictions[day] = [prediction * day_1_lift_required for prediction in self.predictions["natural"]]
-            # sns.lineplot(x=[i for i in range(len(self.predictions[day]))],
-            #              y=self.predictions[day],
-            #              color="b",
-            #              ci=False,
-            #              label=f"Day {day} breakeven")
+            self.predictions[day] = [prediction * day_1_lift_required for prediction in self.predictions["natural"]]
+            sns.lineplot(x=[i for i in range(len(self.predictions[day]))],
+                         y=self.predictions[day],
+                         color="k",
+                         ci=False,
+                         label=f"Jacob - Day {day} BE")
         plt.axhline(y=1, c="k")
-        plt.title("Actual predictions with breakeven curves")
+        plt.title("2020-09-23-app-level-box-office.json")
 
-        graeme_df = self.plot_graemes_be_curves(30, day_1_lift_required)
-        sns.lineplot(x=graeme_df.age, y=graeme_df.roas, color="r", ci=False, label=f"Graeme predict")
+        graeme_df = self.plot_graemes_be_curves()
+        sns.lineplot(x=graeme_df.age, y=graeme_df.roas, linestyle="dashed",
+                     color="k", ci=False, label=f"Graeme - Day 45 BE")
 
         future_df = self.plot_future_data()
-        future_X = future_df.days_since_install.values
-        future_y = future_df.roas.values
-        sns.lineplot(x=future_X, y=future_y, color="k", ci=False, label=f"Actual data")
+        # future_X = future_df.days_since_install.values
+        # future_y = future_df.roas.values
+        # sns.lineplot(x=future_X, y=future_y, color="k", ci=False, label=f"Actual data")
+        sns.lineplot(data=future_df, x='days_since_install', y='roas', hue='install_cohort', ci=False)
 
         plt.show()
 
+
+
+
     # Below are completely unneeded functions to validate vs Graeme's curves
-    def plot_graemes_be_curves(self, day, adjustment=None):
+    def plot_graemes_be_curves(self):
         df = pd.read_csv("graeme.csv")
-        graeme_be_df = df[df["target_scenario"] == f"be{day}"]
+        graeme_be_df = df[df["target_scenario"] == f"be45"]
         graeme_be_df["age"] = graeme_be_df["age"] - 1
-        if adjustment:
-            graeme_be_df["roas"] = graeme_be_df["roas"] / adjustment
         return graeme_be_df
 
+    # Below are completely unneeded functions to validate vs Graeme's curves
     def plot_future_data(self):
         self.redshift_helper_2 = RedshiftHelper({
             'game_name': 'hydrostone',
-            'start_date': '2021-01-19',
-            'end_date': '2021-03-10'})
-        self.earliest_np_date = pd.Timestamp(date(2021, 1, 19))
-        self.latest_np_end_date = pd.Timestamp(date(2021, 3, 10))
+            'start_date': '2020-09-23',
+            'end_date': '2021-01-23'})
+        self.earliest_np_date = pd.Timestamp(date(2020, 9, 23))
+        self.latest_np_end_date = pd.Timestamp(date(2021, 1, 23))
         self.redshift_helper_2.set_redshift_connection()
         user_summary_df = self.redshift_helper_2.get_user_summary_df()
         spend_df = self.redshift_helper_2.get_spend_df()
@@ -389,7 +396,9 @@ class RoasCurve:
             nan_filled_df = nan_filled_df.append(same_install_age_df)
         roas_df = nan_filled_df
 
-        roas_df = roas_df[(roas_df["ua_installs"] > self.min_num_installs) & (roas_df["spend"] > 0)]
+        print("min stuff:", roas_df["ua_installs"].max())
+
+        roas_df = roas_df[(roas_df["ua_installs"] > 100) & (roas_df["spend"] > 0)]
 
         organic_multiplier = self.get_organic_lift(roas_df)
 
@@ -400,15 +409,21 @@ class RoasCurve:
         roas_df['roas'] = roas_df.groupby(['install_date'])['roas'].ffill()
 
         # Assign each day to a weekly cohort, with the cohorts starting on day 1
-        offset_week_day = 7 - self.earliest_np_date.weekday()
-        roas_df["offset_install_date"] = roas_df['install_date'] + timedelta(days=offset_week_day)
-        roas_df['install_cohort'] = roas_df['offset_install_date'].dt.to_period('W').apply(lambda r: r.start_time)
-        roas_df["install_cohort"] = roas_df['install_cohort'] - timedelta(days=offset_week_day)
-        roas_df.drop("offset_install_date", axis=1, inplace=True)
+        # offset_week_day = 7 - self.earliest_np_date.weekday()
+        # roas_df["offset_install_date"] = roas_df['install_date'] + timedelta(days=offset_week_day)
+        # roas_df['install_cohort'] = roas_df['offset_install_date'].dt.to_period('W').apply(lambda r: r.start_time)
+        # roas_df["install_cohort"] = roas_df['install_cohort'] - timedelta(days=offset_week_day)
+        # roas_df.drop("offset_install_date", axis=1, inplace=True)
+        roas_df['install_cohort'] = roas_df['install_date'].dt.to_period('M').apply(lambda r: r.start_time)
+
 
         # Add install age (days since the first install date)
         roas_df["install_age"] = (roas_df['install_date'] - self.earliest_np_date).dt.days + 1
 
-        self.raw_roas_df = roas_df
-        df = self.get_roas_mean_df()
-        return df
+        roas_df = roas_df[roas_df["days_since_install"] < 45]
+
+        return roas_df
+
+        # self.raw_roas_df = roas_df
+        # df = self.get_roas_mean_df()
+        # return df
